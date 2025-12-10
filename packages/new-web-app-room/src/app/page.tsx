@@ -1,22 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+
+interface Alert {
+  id: string;
+  whale: string;
+  amount: string;
+  destination: string;
+  timestamp: Date;
+  isExchange: boolean;
+  txHash: string;
+}
 
 export default function WhaleAlert() {
   const [tokenAddress, setTokenAddress] = useState('');
   const [whaleWallets, setWhaleWallets] = useState<string[]>([]);
   const [newWallet, setNewWallet] = useState('');
   const [threshold, setThreshold] = useState('500000');
-  const [notificationChannel, setNotificationChannel] = useState<'telegram' | 'discord'>('telegram');
+  const [email, setEmail] = useState('');
   const [isMonitoring, setIsMonitoring] = useState(false);
-  const [alerts, setAlerts] = useState<Array<{
-    id: string;
-    whale: string;
-    amount: string;
-    destination: string;
-    timestamp: Date;
-    isExchange: boolean;
-  }>>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [status, setStatus] = useState('');
+  const monitoringRef = useRef<NodeJS.Timeout | null>(null);
 
   const addWhaleWallet = () => {
     if (newWallet && !whaleWallets.includes(newWallet)) {
@@ -29,27 +34,93 @@ export default function WhaleAlert() {
     setWhaleWallets(whaleWallets.filter(w => w !== wallet));
   };
 
+  const checkTransactions = async () => {
+    try {
+      const response = await fetch('/api/monitor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tokenAddress,
+          whaleWallets,
+          threshold: parseFloat(threshold),
+        }),
+      });
+
+      const data = await response.json() as { transactions?: any[] };
+      
+      if (data.transactions && data.transactions.length > 0) {
+        const newAlerts: Alert[] = data.transactions.map((tx: any) => ({
+          id: tx.hash,
+          whale: tx.from,
+          amount: `${tx.valueUSD.toLocaleString()}`,
+          destination: tx.to,
+          timestamp: new Date(tx.timestamp * 1000),
+          isExchange: tx.isExchange,
+          txHash: tx.hash,
+        }));
+
+        setAlerts(prev => [...newAlerts, ...prev]);
+
+        // Send email notification for each new alert
+        if (email) {
+          for (const alert of newAlerts) {
+            await fetch('/api/send-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: email,
+                subject: `🚨 Whale Alert: ${alert.isExchange ? 'EXCHANGE DEPOSIT' : 'Large Transfer'}`,
+                html: `
+                  <h2>Whale Movement Detected!</h2>
+                  <p><strong>Type:</strong> ${alert.isExchange ? '🚨 EXCHANGE DEPOSIT' : '⚠️ Large Transfer'}</p>
+                  <p><strong>From:</strong> ${alert.whale}</p>
+                  <p><strong>To:</strong> ${alert.destination}</p>
+                  <p><strong>Amount:</strong> ${alert.amount}</p>
+                  <p><strong>Time:</strong> ${alert.timestamp.toLocaleString()}</p>
+                  <p><strong>Transaction:</strong> <a href="https://etherscan.io/tx/${alert.txHash}">View on Etherscan</a></p>
+                `,
+              }),
+            });
+          }
+        }
+      }
+
+      setStatus(`Last checked: ${new Date().toLocaleTimeString()}`);
+    } catch (error) {
+      console.error('Error checking transactions:', error);
+      setStatus('Error checking transactions');
+    }
+  };
+
   const startMonitoring = () => {
     if (tokenAddress && whaleWallets.length > 0) {
       setIsMonitoring(true);
-      // Simulate an alert for demo purposes
-      setTimeout(() => {
-        const mockAlert = {
-          id: Date.now().toString(),
-          whale: whaleWallets[0].substring(0, 10) + '...',
-          amount: '$750,000',
-          destination: 'Binance',
-          timestamp: new Date(),
-          isExchange: true
-        };
-        setAlerts([mockAlert, ...alerts]);
-      }, 3000);
+      setStatus('Monitoring started...');
+      
+      // Check immediately
+      checkTransactions();
+      
+      // Then check every 30 seconds
+      monitoringRef.current = setInterval(checkTransactions, 30000);
     }
   };
 
   const stopMonitoring = () => {
     setIsMonitoring(false);
+    setStatus('Monitoring stopped');
+    if (monitoringRef.current) {
+      clearInterval(monitoringRef.current);
+      monitoringRef.current = null;
+    }
   };
+
+  useEffect(() => {
+    return () => {
+      if (monitoringRef.current) {
+        clearInterval(monitoringRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white p-6">
@@ -132,32 +203,25 @@ export default function WhaleAlert() {
               <p className="text-xs text-gray-400 mt-1">Only alert for transactions above this amount</p>
             </div>
 
-            {/* Notification Channel */}
+            {/* Email Notification */}
             <div className="mb-6">
-              <label className="block text-sm font-medium mb-2">Notification Channel</label>
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setNotificationChannel('telegram')}
-                  className={`flex-1 px-4 py-3 rounded-lg font-medium transition-colors ${
-                    notificationChannel === 'telegram'
-                      ? 'bg-blue-600 hover:bg-blue-700'
-                      : 'bg-white/5 hover:bg-white/10'
-                  }`}
-                >
-                  📱 Telegram
-                </button>
-                <button
-                  onClick={() => setNotificationChannel('discord')}
-                  className={`flex-1 px-4 py-3 rounded-lg font-medium transition-colors ${
-                    notificationChannel === 'discord'
-                      ? 'bg-indigo-600 hover:bg-indigo-700'
-                      : 'bg-white/5 hover:bg-white/10'
-                  }`}
-                >
-                  💬 Discord
-                </button>
-              </div>
+              <label className="block text-sm font-medium mb-2">📧 Email for Alerts</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="your@email.com"
+                className="w-full px-4 py-3 bg-white/5 border border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+              <p className="text-xs text-gray-400 mt-1">Receive instant email alerts for whale movements</p>
             </div>
+
+            {/* Status */}
+            {status && (
+              <div className="mb-4 p-3 bg-blue-500/20 border border-blue-500/50 rounded-lg text-sm">
+                {status}
+              </div>
+            )}
 
             {/* Start/Stop Button */}
             <button
@@ -219,9 +283,17 @@ export default function WhaleAlert() {
                       </span>
                     </div>
                     <div className="space-y-1 text-sm">
-                      <p><span className="text-gray-400">Whale:</span> {alert.whale}</p>
+                      <p><span className="text-gray-400">Whale:</span> <span className="font-mono text-xs">{alert.whale.substring(0, 20)}...</span></p>
                       <p><span className="text-gray-400">Amount:</span> <span className="font-bold">{alert.amount}</span></p>
-                      <p><span className="text-gray-400">Destination:</span> {alert.destination}</p>
+                      <p><span className="text-gray-400">Destination:</span> <span className="font-mono text-xs">{alert.destination.substring(0, 20)}...</span></p>
+                      <a 
+                        href={`https://etherscan.io/tx/${alert.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 underline"
+                      >
+                        View on Etherscan →
+                      </a>
                     </div>
                   </div>
                 ))
@@ -252,4 +324,9 @@ export default function WhaleAlert() {
     </div>
   );
 }
+
+
+
+
+
 
