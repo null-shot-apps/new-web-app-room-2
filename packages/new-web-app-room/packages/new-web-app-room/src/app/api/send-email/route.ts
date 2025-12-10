@@ -1,9 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 
+interface EmailRequest {
+  to: string;
+  alert: {
+    whale: string;
+    to: string;
+    amount: string;
+    estimatedValue: string;
+    destination: string;
+    isExchange: boolean;
+    timestamp: string;
+    txHash: string;
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json() as EmailRequest;
     const { to, alert } = body;
 
     // Create transporter (using Gmail as example - users would configure their own)
@@ -110,4 +124,5 @@ export async function POST(request: NextRequest) {
     }, { status: 500 });
   }
 }
+
 

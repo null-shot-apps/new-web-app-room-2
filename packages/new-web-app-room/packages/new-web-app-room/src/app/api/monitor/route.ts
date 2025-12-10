@@ -53,12 +53,26 @@ const monitoringSessions = new Map<string, {
   lastBlock: number;
 }>();
 
+interface MonitorRequest {
+  action: 'start' | 'stop' | 'check';
+  sessionId: string;
+  tokenAddress?: string;
+  whaleWallets?: string[];
+  threshold?: string;
+  email?: string;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json() as MonitorRequest;
     const { action, sessionId, tokenAddress, whaleWallets, threshold, email } = body;
 
     if (action === 'start') {
+      // Validate required fields
+      if (!tokenAddress || !whaleWallets || !threshold || !email) {
+        return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      }
+
       // Initialize Ethereum provider (using public RPC)
       const provider = new ethers.JsonRpcProvider('https://eth.llamarpc.com');
       
@@ -210,4 +224,6 @@ function getExchangeName(address: string): string {
   }
   return 'Exchange';
 }
+
+
 
